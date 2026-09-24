@@ -29,6 +29,53 @@ function getTypeIcon($type) {
 }
 
 /**
+ * 获取时间范围文字
+ */
+function getRangeLabel($range) {
+    $map = ['all' => '全部时间', 'today' => '今天', '7d' => '最近7天', '30d' => '最近30天'];
+    return $map[$range] ?? '全部时间';
+}
+
+/**
+ * 获取时间范围筛选的起始时间
+ * 返回 null 表示不限制
+ */
+function getRangeStartTime($range) {
+    switch ($range) {
+        case 'today':
+            return date('Y-m-d 00:00:00');
+        case '7d':
+            return date('Y-m-d H:i:s', strtotime('-7 days'));
+        case '30d':
+            return date('Y-m-d H:i:s', strtotime('-30 days'));
+        default:
+            return null;
+    }
+}
+
+/**
+ * 获取排序方式文字
+ */
+function getSortLabel($sort) {
+    $map = ['time' => '按时间', 'hot' => '按热度'];
+    return $map[$sort] ?? '按时间';
+}
+
+/**
+ * 构建首页筛选链接的查询字符串（类型/时间范围/排序/页码）
+ * 所有条件显式带上，保证翻页或切换任一条件后组合状态不丢失
+ */
+function buildFilterQuery($type, $range, $sort, $page = 1) {
+    $query = 'type=' . urlencode($type)
+        . '&range=' . urlencode($range)
+        . '&sort=' . urlencode($sort);
+    if ($page > 1) {
+        $query .= '&page=' . intval($page);
+    }
+    return $query;
+}
+
+/**
  * 获取状态文字
  */
 function getStatusLabel($status) {

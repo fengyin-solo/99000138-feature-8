@@ -828,8 +828,106 @@ a:hover { color: var(--primary-dark); }
     .report-type-options {
         grid-template-columns: 1fr;
     }
-    
+
     .report-text {
         display: none;
+    }
+}
+
+/* ========== Combined Filter (Time Range & Reset) ========== */
+.filter-bar-sub {
+    margin-top: 10px;
+}
+.filter-ranges {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.filter-label {
+    font-size: .85rem;
+    color: var(--gray-500);
+    margin-right: 2px;
+    white-space: nowrap;
+}
+.filter-reset {
+    font-size: .85rem;
+    color: var(--danger);
+    padding: 6px 12px;
+    border-radius: 20px;
+    border: 1px solid transparent;
+    white-space: nowrap;
+    transition: var(--transition);
+}
+.filter-reset:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+    background: #fef2f2;
+}
+
+/* ========== Result Summary ========== */
+.summary-section {
+    padding: 0 0 16px;
+}
+.result-summary {
+    background: #fff;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 14px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    border-left: 4px solid var(--primary);
+}
+.summary-counts {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+.summary-total {
+    font-size: .95rem;
+    color: var(--gray-700);
+    white-space: nowrap;
+}
+.summary-total strong {
+    font-size: 1.2rem;
+    color: var(--primary);
+    margin: 0 2px;
+}
+.summary-item {
+    font-size: .8rem;
+    color: var(--gray-500);
+    background: var(--gray-50);
+    padding: 3px 10px;
+    border-radius: 12px;
+    white-space: nowrap;
+}
+.summary-conditions {
+    font-size: .8rem;
+    color: var(--gray-400);
+}
+
+/* ========== Empty State Extras ========== */
+.empty-desc {
+    font-size: .85rem;
+    color: var(--gray-400);
+}
+.empty-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+    .result-summary {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    .filter-bar-sub {
+        align-items: flex-start;
     }
 }

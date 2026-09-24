@@ -9,36 +9,89 @@ $jsPath = 'assets/js/main.js';
 
 $db = getDB();
 
-// 获取排序参数
-$sort = $_GET['sort'] ?? 'time';
-$type = $_GET['type'] ?? '';
+// ===== 组合筛选条件：类型 + 时间范围 + 排序 =====
+$validTypes = ['help', 'suggest', 'lost'];
+$validRanges = ['all', 'today', '7d', '30d'];
+$validSorts = ['time', 'hot'];
+
+// 恢复默认筛选
+if (isset($_GET['reset'])) {
+    unset($_SESSION['home_filter']);
+    header('Location: index.php');
+    exit;
+}
+
+// 显式传参优先；未传参时回退到本次会话保存的条件，实现跨页面保留
+$savedFilter = $_SESSION['home_filter'] ?? [];
+
+$type = $_GET['type'] ?? ($savedFilter['type'] ?? '');
+if (!in_array($type, $validTypes, true)) {
+    $type = '';
+}
+
+$range = $_GET['range'] ?? ($savedFilter['range'] ?? 'all');
+if (!in_array($range, $validRanges, true)) {
+    $range = 'all';
+}
+
+$sort = $_GET['sort'] ?? ($savedFilter['sort'] ?? 'time');
+if (!in_array($sort, $validSorts, true)) {
+    $sort = 'time';
+}
+
+// 记住当前组合条件，切换页面或回到首页后仍保留
+$_SESSION['home_filter'] = ['type' => $type, 'range' => $range, 'sort' => $sort];
+
 $page = max(1, intval($_GET['page'] ?? 1));
 $pageSize = 10;
-$offset = ($page - 1) * $pageSize;
 
 // 构建查询
 $where = "WHERE status = 1";
 $params = [];
 
-if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
+if ($type !== '') {
     $where .= " AND type = ?";
     $params[] = $type;
+}
+
+$rangeStart = getRangeStartTime($range);
+if ($rangeStart !== null) {
+    $where .= " AND created_at >= ?";
+    $params[] = $rangeStart;
 }
 
 // 排序
 $orderBy = ($sort === 'hot') ? "views DESC, created_at DESC" : "created_at DESC";
 
-// 总数
-$countStmt = $db->prepare("SELECT COUNT(*) FROM messages $where");
-$countStmt->execute($params);
-$total = $countStmt->fetchColumn();
-$totalPages = ceil($total / $pageSize);
+// 结果摘要统计（与列表共用同一查询条件，保证列表、摘要、页数一致）
+$summaryStmt = $db->prepare("SELECT
+    COUNT(*) as total,
+    SUM(CASE WHEN type='help' THEN 1 ELSE 0 END) as help_count,
+    SUM(CASE WHEN type='suggest' THEN 1 ELSE 0 END) as suggest_count,
+    SUM(CASE WHEN type='lost' THEN 1 ELSE 0 END) as lost_count
+    FROM messages $where");
+$summaryStmt->execute($params);
+$summary = $summaryStmt->fetch();
+
+$total = (int)$summary['total'];
+$totalPages = max(1, (int)ceil($total / $pageSize));
+
+// 页码超出范围时跳转到最后一页，避免列表与摘要、分页对不上
+if ($page > $totalPages) {
+    header('Location: index.php?' . buildFilterQuery($type, $range, $sort, $totalPages));
+    exit;
+}
+
+$offset = ($page - 1) * $pageSize;
 
 // 列表
 $sql = "SELECT id, nickname, type, title, content, image, views, created_at FROM messages $where ORDER BY $orderBy LIMIT $pageSize OFFSET $offset";
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $messages = $stmt->fetchAll();
+
+// 是否有生效的筛选条件（用于空态提示与清除入口）
+$hasActiveFilter = ($type !== '' || $range !== 'all');
 
 // 获取当前用户已收藏的留言ID
 $favoritedIds = getFavoritedMessageIds();
@@ -107,14 +160,43 @@ include __DIR__ . '/includes/header.php';
     <div class="container">
         <div class="filter-bar">
             <div class="filter-types">
-                <a href="index.php?sort=<?= $sort ?>" class="filter-tag <?= !$type ? 'active' : '' ?>">全部</a>
-                <a href="index.php?sort=<?= $sort ?>&type=help" class="filter-tag <?= $type === 'help' ? 'active' : '' ?>">🆘 求助</a>
-                <a href="index.php?sort=<?= $sort ?>&type=suggest" class="filter-tag <?= $type === 'suggest' ? 'active' : '' ?>">💡 建议</a>
-                <a href="index.php?sort=<?= $sort ?>&type=lost" class="filter-tag <?= $type === 'lost' ? 'active' : '' ?>">🔍 失物招领</a>
+                <a href="index.php?<?= buildFilterQuery('', $range, $sort) ?>" class="filter-tag <?= !$type ? 'active' : '' ?>">全部</a>
+                <a href="index.php?<?= buildFilterQuery('help', $range, $sort) ?>" class="filter-tag <?= $type === 'help' ? 'active' : '' ?>">🆘 求助</a>
+                <a href="index.php?<?= buildFilterQuery('suggest', $range, $sort) ?>" class="filter-tag <?= $type === 'suggest' ? 'active' : '' ?>">💡 建议</a>
+                <a href="index.php?<?= buildFilterQuery('lost', $range, $sort) ?>" class="filter-tag <?= $type === 'lost' ? 'active' : '' ?>">🔍 失物招领</a>
             </div>
             <div class="filter-sort">
-                <a href="index.php?sort=time&type=<?= $type ?>" class="sort-btn <?= $sort === 'time' ? 'active' : '' ?>">🕐 按时间</a>
-                <a href="index.php?sort=hot&type=<?= $type ?>" class="sort-btn <?= $sort === 'hot' ? 'active' : '' ?>">🔥 按热度</a>
+                <a href="index.php?<?= buildFilterQuery($type, $range, 'time') ?>" class="sort-btn <?= $sort === 'time' ? 'active' : '' ?>">🕐 按时间</a>
+                <a href="index.php?<?= buildFilterQuery($type, $range, 'hot') ?>" class="sort-btn <?= $sort === 'hot' ? 'active' : '' ?>">🔥 按热度</a>
+            </div>
+        </div>
+        <div class="filter-bar filter-bar-sub">
+            <div class="filter-ranges">
+                <span class="filter-label">📅 时间范围</span>
+                <a href="index.php?<?= buildFilterQuery($type, 'all', $sort) ?>" class="filter-tag <?= $range === 'all' ? 'active' : '' ?>">全部时间</a>
+                <a href="index.php?<?= buildFilterQuery($type, 'today', $sort) ?>" class="filter-tag <?= $range === 'today' ? 'active' : '' ?>">今天</a>
+                <a href="index.php?<?= buildFilterQuery($type, '7d', $sort) ?>" class="filter-tag <?= $range === '7d' ? 'active' : '' ?>">最近7天</a>
+                <a href="index.php?<?= buildFilterQuery($type, '30d', $sort) ?>" class="filter-tag <?= $range === '30d' ? 'active' : '' ?>">最近30天</a>
+            </div>
+            <?php if ($hasActiveFilter): ?>
+            <a href="index.php?reset=1" class="filter-reset">✕ 清除筛选</a>
+            <?php endif; ?>
+        </div>
+    </div>
+</section>
+
+<!-- 当前结果摘要 -->
+<section class="summary-section">
+    <div class="container">
+        <div class="result-summary">
+            <div class="summary-counts">
+                <span class="summary-total">共 <strong><?= $total ?></strong> 条结果</span>
+                <span class="summary-item">🆘 求助 <?= (int)$summary['help_count'] ?></span>
+                <span class="summary-item">💡 建议 <?= (int)$summary['suggest_count'] ?></span>
+                <span class="summary-item">🔍 失物招领 <?= (int)$summary['lost_count'] ?></span>
+            </div>
+            <div class="summary-conditions">
+                <?= $type ? getTypeLabel($type) : '全部类型' ?> · <?= getRangeLabel($range) ?> · <?= getSortLabel($sort) ?> · 第 <?= $page ?>/<?= $totalPages ?> 页
             </div>
         </div>
     </div>
@@ -124,11 +206,23 @@ include __DIR__ . '/includes/header.php';
 <section class="message-list-section">
     <div class="container">
         <?php if (empty($messages)): ?>
+        <?php if ($hasActiveFilter): ?>
+        <div class="empty-state">
+            <div class="empty-icon">🔍</div>
+            <p>没有找到符合条件的留言</p>
+            <p class="empty-desc">当前条件：<?= $type ? getTypeLabel($type) : '全部类型' ?> · <?= getRangeLabel($range) ?></p>
+            <div class="empty-actions">
+                <a href="index.php?reset=1" class="btn btn-primary">恢复默认筛选</a>
+                <a href="submit.php" class="btn btn-secondary">发布留言</a>
+            </div>
+        </div>
+        <?php else: ?>
         <div class="empty-state">
             <div class="empty-icon">📭</div>
             <p>暂无留言信息</p>
             <a href="submit.php" class="btn btn-primary">发布第一条留言</a>
         </div>
+        <?php endif; ?>
         <?php else: ?>
         <div class="message-list">
             <?php foreach ($messages as $msg): ?>
@@ -160,14 +254,15 @@ include __DIR__ . '/includes/header.php';
         <?php if ($totalPages > 1): ?>
         <div class="pagination">
             <?php if ($page > 1): ?>
-            <a href="index.php?page=<?= $page - 1 ?>&sort=<?= $sort ?>&type=<?= $type ?>" class="page-btn">上一页</a>
+            <a href="index.php?<?= buildFilterQuery($type, $range, $sort, $page - 1) ?>" class="page-btn">上一页</a>
             <?php endif; ?>
             <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
-            <a href="index.php?page=<?= $i ?>&sort=<?= $sort ?>&type=<?= $type ?>" class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
+            <a href="index.php?<?= buildFilterQuery($type, $range, $sort, $i) ?>" class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
             <?php endfor; ?>
             <?php if ($page < $totalPages): ?>
-            <a href="index.php?page=<?= $page + 1 ?>&sort=<?= $sort ?>&type=<?= $type ?>" class="page-btn">下一页</a>
+            <a href="index.php?<?= buildFilterQuery($type, $range, $sort, $page + 1) ?>" class="page-btn">下一页</a>
             <?php endif; ?>
+            <span class="page-info">第 <?= $page ?> / <?= $totalPages ?> 页 · 共 <?= $total ?> 条</span>
         </div>
         <?php endif; ?>
         <?php endif; ?>
