@@ -234,3 +234,191 @@ function getPendingReportCount() {
     $db = getDB();
     return $db->query("SELECT COUNT(*) FROM reports WHERE status = 0")->fetchColumn();
 }
+
+/* ===================== 首页组合筛选与摘要视图 ===================== */
+
+/**
+ * 首页类型可选项（键为数据库中的 type 值，'' 表示全部）
+ */
+function homeTypeOptions() {
+    return [
+        ''       => '全部',
+        'help'   => '🆘 求助',
+        'suggest' => '💡 建议',
+        'lost'   => '🔍 失物招领',
+    ];
+}
+
+/**
+ * 时间范围可选项（键为天数，'' 表示不限时间）
+ */
+function homeRangeOptions() {
+    return [
+        ''   => '全部时间',
+        '7'  => '近 7 天',
+        '30' => '近 30 天',
+        '90' => '近 90 天',
+        '365' => '近一年',
+    ];
+}
+
+/**
+ * 排序可选项
+ */
+function homeSortOptions() {
+    return [
+        'time' => '🕐 按时间',
+        'hot'  => '🔥 按热度',
+    ];
+}
+
+/**
+ * 展示视图可选项
+ */
+function homeViewOptions() {
+    return [
+        'list'    => '📄 列表',
+        'summary' => '📊 摘要',
+    ];
+}
+
+/**
+ * 将任意输入规范化为合法的首页筛选条件
+ */
+function normalizeHomeFilters(array $raw) {
+    $type = isset($raw['type']) && in_array($raw['type'], ['help', 'suggest', 'lost'], true)
+        ? $raw['type'] : '';
+    $range = isset($raw['range']) && array_key_exists((string)$raw['range'], homeRangeOptions())
+        ? (string)$raw['range'] : '';
+    $sort = (isset($raw['sort']) && $raw['sort'] === 'hot') ? 'hot' : 'time';
+    $view = (isset($raw['view']) && $raw['view'] === 'summary') ? 'summary' : 'list';
+    return compact('type', 'range', 'sort', 'view');
+}
+
+/**
+ * 判断筛选条件是否为默认值
+ */
+function isDefaultHomeFilters(array $filters) {
+    return $filters === normalizeHomeFilters([]);
+}
+
+/**
+ * 把筛选条件写入 Cookie，供切换页面/回到首页后恢复
+ */
+function persistHomeFilters(array $filters) {
+    $payload = json_encode($filters, JSON_UNESCAPED_UNICODE);
+    if ($payload !== false) {
+        setcookie('home_filters', $payload, [
+            'expires'  => time() + 86400 * 30,
+            'path'     => '/',
+            'samesite' => 'Lax',
+        ]);
+    }
+}
+
+/**
+ * 清除首页筛选条件记忆
+ */
+function clearHomeFilters() {
+    setcookie('home_filters', '', [
+        'expires'  => time() - 3600,
+        'path'     => '/',
+        'samesite' => 'Lax',
+    ]);
+}
+
+/**
+ * 解析首页筛选条件：
+ * - URL 显式带条件参数时以 URL 为准（兼容旧链接，缺省维度取默认值），并更新记忆
+ * - 仅翻页或不带任何条件参数时，从 Cookie 恢复上次的组合条件
+ * - ?reset=1 清除记忆并回到默认条件
+ */
+function resolveHomeFilters() {
+    if (isset($_GET['reset'])) {
+        clearHomeFilters();
+        header('Location: index.php');
+        exit;
+    }
+
+    $explicitKeys = ['type', 'range', 'sort', 'view'];
+    $hasExplicit = false;
+    foreach ($explicitKeys as $key) {
+        if (isset($_GET[$key])) {
+            $hasExplicit = true;
+            break;
+        }
+    }
+
+    if ($hasExplicit) {
+        $filters = normalizeHomeFilters($_GET);
+        persistHomeFilters($filters);
+        return $filters;
+    }
+
+    if (!empty($_COOKIE['home_filters'])) {
+        $saved = json_decode($_COOKIE['home_filters'], true);
+        if (is_array($saved)) {
+            return normalizeHomeFilters($saved);
+        }
+    }
+
+    return normalizeHomeFilters([]);
+}
+
+/**
+ * 基于筛选条件构造留言查询（列表、总数、摘要共用，保证结果口径一致）
+ * 返回 [WHERE 子句, 绑定参数, ORDER BY 子句]
+ */
+function buildHomeMessageQuery(array $filters) {
+    $where = 'WHERE status = 1';
+    $params = [];
+
+    if ($filters['type'] !== '') {
+        $where .= ' AND type = ?';
+        $params[] = $filters['type'];
+    }
+
+    if ($filters['range'] !== '') {
+        // 范围值已通过白名单校验，天数为安全整数字符串
+        $days = (int)$filters['range'];
+        $where .= " AND created_at >= DATE_SUB(NOW(), INTERVAL $days DAY)";
+    }
+
+    $orderBy = $filters['sort'] === 'hot'
+        ? 'views DESC, created_at DESC'
+        : 'created_at DESC';
+
+    return [$where, $params, $orderBy];
+}
+
+/**
+ * 生成携带当前组合条件的首页链接
+ * @param bool $explicit 筛选控件链接需显式表达全部维度（即使为默认值），
+ *                       以便与“仅翻页/回到首页时沿用记忆”区分开
+ */
+function homeFilterUrl(array $filters, array $overrides = [], $explicit = false) {
+    $params = array_merge(
+        ['type' => '', 'range' => '', 'sort' => 'time', 'view' => 'list', 'page' => 1],
+        $filters,
+        $overrides
+    );
+
+    $query = [];
+    if ((int)$params['page'] > 1) {
+        $query['page'] = (int)$params['page'];
+    }
+    if ($params['type'] !== '' || $explicit) {
+        $query['type'] = $params['type'];
+    }
+    if ($params['range'] !== '' || $explicit) {
+        $query['range'] = $params['range'];
+    }
+    if ($params['sort'] === 'hot' || $explicit) {
+        $query['sort'] = $params['sort'];
+    }
+    if ($params['view'] === 'summary' || $explicit) {
+        $query['view'] = $params['view'];
+    }
+
+    return 'index.php' . (empty($query) ? '' : '?' . http_build_query($query));
+}
